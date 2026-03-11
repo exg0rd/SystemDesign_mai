@@ -70,6 +70,8 @@
 
 Все взаимодействия происходят через веб приложение по протоколу HTTPS
 
+![System Context Diagram](images/SystemContext.svg)
+
 ---
 
 ## 4. Основные задачи пользователей и их реализация
@@ -161,6 +163,9 @@ Web Application -> API Gateway -> Event Service -> Cache -> Database
 - Роли пользователей и энтрипоинты
 
 Контейнеры организованы по микросвервисной архитектуре с разделением ответственности 
+
+![Container Diagram](images/Containers.svg)
+
 ---
 
 ## 8. Технологии на контейнерах и связях
@@ -223,6 +228,8 @@ Web Application -> API Gateway -> Event Service -> Cache -> Database
 19. API Gateway возвращает статус 201 Created в Web Application
 20. Web Application показывает подтверждение регистрации участнику
 
+![Dynamic Diagram - User Registration](images/UserRegistration.svg)
+
 ---
 
 ## Архитектурные решения
@@ -242,5 +249,9 @@ Redis используется для кэширования частых зап
 ### Развертывание
 
 Система развертывается в Kubernetes кластере с отдельными подами для каждого сервиса. База данных использует схему Primary-Replica для обеспечения отказоустойчивости и масштабирования оперциии чтения
+
+Диаграмма Deployment (C3) показывает развертывание в production окружении:
+
+![Deployment Diagram](images/Deployment.svg)
 
 ---
