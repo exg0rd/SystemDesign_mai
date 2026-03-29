@@ -1,0 +1,174 @@
+openapi: 3.0.3
+info:
+  title: Event Manager API
+  version: 1.0.0
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas: 
+    UserCreate:
+      type: object
+      required: [login, password, first_name, last_name, email]
+      properties:
+        login: { type: string, example: exg0rd }
+        password: { type: string, example: secret }
+        first_name: { type: string, example: Egor }
+        last_name: { type: string, example: Sayapin }
+        email: { type: string, example: egor_sayapin@mail.com }
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        login: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        email: { type: string }
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login: { type: string }
+        password: { type: string }
+    TokenResponse:
+      type: object
+      properties:
+        token: { type: string }
+    EventCreate:
+      type: object
+      required: [title, date]
+      properties:
+        title: { type: string, example: "mai lecture" }
+        description: { type: string }
+        date: { type: string, example: "2026-03-29" }
+        location: { type: string }
+    Event:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        date: { type: string }
+        location: { type: string }
+        organizer_id: { type: integer }
+
+paths:
+  /auth/login:
+    post:
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { login: exg0rd, password: secret }
+      responses:
+        '200':
+          description: Token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401':
+          description: Invalid credentials
+
+  /auth/logout:
+    post:
+      summary: Logout
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Logged out
+
+  /users:
+    post:
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  login: { type: string }
+        '409':
+          description: Login already exists
+
+  /users/{login}:
+    get:
+      summary: Get user by login
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: login
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '404':
+          description: Not found
+
+  /users/search:
+    get:
+      summary: Search users by name mask
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: first_name
+          in: query
+          schema: { type: string }
+          example: Egor
+        - name: last_name
+          in: query
+          schema: { type: string }
+          example: Sayapin
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+
+  /events:
+    post:
+      summary: Create event
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  title: { type: string }
+    get:
+      summary: Get all events
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Event' }
