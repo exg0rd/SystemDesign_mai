@@ -1,65 +1,32 @@
-#include <Poco/Net/HTTPServer.h>
-#include <Poco/Net/HTTPRequestHandlerFactory.h>
-#include <Poco/Net/HTTPRequestHandler.h>
-#include <Poco/Net/HTTPServerRequest.h>
-#include <Poco/Net/HTTPServerResponse.h>
-#include <Poco/Net/ServerSocket.h>
-#include <Poco/Util/ServerApplication.h>
-#include <Poco/URI.h>
-#include <regex>
-#include "db/Database.h"
-#include "handlers/AuthHandler.h"
-#include "handlers/UserHandler.h"
-#include "handlers/EventHandler.h"
+#include <userver/clients/dns/component.hpp>
+#include <userver/components/minimal_server_component_list.hpp>
+#include <userver/storages/postgres/component.hpp>
+#include <userver/testsuite/testsuite_support.hpp>
+#include <userver/utils/daemon_run.hpp>
 
-class NotFoundHandler : public Poco::Net::HTTPRequestHandler {
-public:
-    void handleRequest(Poco::Net::HTTPServerRequest&, Poco::Net::HTTPServerResponse& resp) override {
-        resp.setContentType("application/json");
-        resp.setStatus(Poco::Net::HTTPResponse::HTTP_NOT_FOUND);
-        resp.send() << "{\"error\":\"not found\"}";
-    }
-};
+#include "handlers/AuthHandler.hpp"
+#include "handlers/UserHandler.hpp"
+#include "handlers/EventHandler.hpp"
+#include "handlers/ParticipantHandler.hpp"
 
-class RequestHandlerFactory : public Poco::Net::HTTPRequestHandlerFactory {
-public:
-    Poco::Net::HTTPRequestHandler* createRequestHandler(const Poco::Net::HTTPServerRequest& req) override {
-        std::string path = Poco::URI(req.getURI()).getPath();
+int main(int argc, char* argv[]) {
+    auto component_list =
+        userver::components::MinimalServerComponentList()
+            .Append<userver::components::Postgres>("event-db")
+            .Append<userver::clients::dns::Component>()
+            .Append<userver::components::TestsuiteSupport>()
+            .Append<event_manager::LoginHandler>()
+            .Append<event_manager::LogoutHandler>()
+            .Append<event_manager::CreateUserHandler>()
+            .Append<event_manager::GetUserByLoginHandler>()
+            .Append<event_manager::SearchUsersHandler>()
+            .Append<event_manager::CreateEventHandler>()
+            .Append<event_manager::GetEventsHandler>()
+            .Append<event_manager::SearchEventsByDateHandler>()
+            .Append<event_manager::RegisterParticipantHandler>()
+            .Append<event_manager::GetParticipantsHandler>()
+            .Append<event_manager::GetUserEventsHandler>()
+            .Append<event_manager::CancelRegistrationHandler>();
 
-        if (path == "/auth/login") return new LoginHandler();
-        if (path == "/auth/logout") return new LogoutHandler();
-        if (path == "/users" && req.getMethod() == "POST") return new CreateUserHandler();
-        if (path == "/users/search") return new SearchUsersByNameHandler();
-
-        std::regex userLoginRe("^/users/([^/]+)$");
-        std::smatch m;
-        if (std::regex_match(path, m, userLoginRe))
-            return new GetUserByLoginHandler(m[1].str());
-
-        if (path == "/events") {
-            if (req.getMethod() == "POST") return new CreateEventHandler();
-            if (req.getMethod() == "GET") return new GetEventsHandler();
-        }
-
-        return new NotFoundHandler();
-    }
-};
-
-class App : public Poco::Util::ServerApplication {
-protected:
-    int main(const std::vector<std::string>&) override {
-        Database::instance().init();
-
-        Poco::Net::ServerSocket svs(8080);
-        Poco::Net::HTTPServer srv(new RequestHandlerFactory(), svs, new Poco::Net::HTTPServerParams());
-        srv.start();
-        waitForTerminationRequest();
-        srv.stop();
-        return Application::EXIT_OK;
-    }
-};
-
-int main(int argc, char** argv) {
-    App app;
-    return app.run(argc, argv);
+    return userver::utils::DaemonMain(argc, argv, component_list);
 }

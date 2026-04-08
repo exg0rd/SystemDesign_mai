@@ -1,23 +1,17 @@
 cmake_minimum_required(VERSION 3.16)
-project(event_manager)
+project(event_manager CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
-find_package(Poco REQUIRED Net Util JSON)
+add_subdirectory(userversource/userver)
 
-add_executable(event_manager
+add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/db/Database.cpp
-    src/middleware/AuthMiddleware.cpp
     src/handlers/AuthHandler.cpp
     src/handlers/UserHandler.cpp
     src/handlers/EventHandler.cpp
+    src/handlers/ParticipantHandler.cpp
 )
 
-target_include_directories(event_manager PRIVATE src)
-target_link_libraries(event_manager
-    Poco::Net
-    Poco::Util
-    Poco::JSON
-    sqlite3
-)
+target_include_directories(${PROJECT_NAME} PRIVATE src)
+target_link_libraries(${PROJECT_NAME} userver::postgresql)

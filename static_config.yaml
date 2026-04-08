@@ -1,0 +1,92 @@
+components_manager:
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+
+    default_task_processor: main-task-processor
+
+    components:
+        server:
+            listener:
+                port: 8080
+                task_processor: main-task-processor
+
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stderr'
+                    level: info
+                    overflow_behavior: discard
+
+        dns-client:
+            fs-task-processor: fs-task-processor
+
+        testsuite-support: {}
+
+        event-db:
+            dbconnection#env: POSTGRES_DSN
+            blocking_task_processor: fs-task-processor
+            dns_resolver: async
+
+        handler-login:
+            path: /auth/login
+            method: POST
+            task_processor: main-task-processor
+
+        handler-logout:
+            path: /auth/logout
+            method: POST
+            task_processor: main-task-processor
+
+        handler-create-user:
+            path: /users
+            method: POST
+            task_processor: main-task-processor
+
+        handler-get-user:
+            path: /users/{login}
+            method: GET
+            task_processor: main-task-processor
+
+        handler-search-users:
+            path: /users/search
+            method: GET
+            task_processor: main-task-processor
+
+        handler-create-event:
+            path: /events
+            method: POST
+            task_processor: main-task-processor
+
+        handler-get-events:
+            path: /events
+            method: GET
+            task_processor: main-task-processor
+
+        handler-search-events-date:
+            path: /events/search
+            method: GET
+            task_processor: main-task-processor
+
+        handler-register-participant:
+            path: /events/{event_id}/participants
+            method: POST
+            task_processor: main-task-processor
+
+        handler-get-participants:
+            path: /events/{event_id}/participants
+            method: GET
+            task_processor: main-task-processor
+
+        handler-get-user-events:
+            path: /users/{user_id}/events
+            method: GET
+            task_processor: main-task-processor
+
+        handler-cancel-registration:
+            path: /events/{event_id}/participants
+            method: DELETE
+            task_processor: main-task-processor

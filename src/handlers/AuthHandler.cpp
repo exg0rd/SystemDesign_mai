@@ -1,71 +1,84 @@
-#include "AuthHandler.h"
-#include "../db/Database.h"
-#include "../middleware/AuthMiddleware.h"
-#include <Poco/JSON/Parser.h>
-#include <Poco/JSON/Object.h>
-#include <Poco/Net/HTTPResponse.h>
-#include <sstream>
-#include <sqlite3.h>
+#include "AuthHandler.hpp"
 
-static std::string hashPassword(const std::string& pwd) {
-    size_t h = std::hash<std::string>{}(pwd);
+#include <iomanip>
+#include <random>
+#include <sstream>
+
+#include <userver/crypto/hash.hpp>
+#include <userver/formats/json/serialize.hpp>
+#include <userver/formats/json/value_builder.hpp>
+#include <userver/server/http/http_status.hpp>
+#include <userver/storages/postgres/cluster.hpp>
+
+namespace event_manager {
+
+namespace {
+
+std::string GenerateToken() {
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<uint64_t> dist;
     std::ostringstream oss;
-    oss << std::hex << h;
+    oss << std::hex << std::setw(16) << std::setfill('0') << dist(gen)
+        << std::setw(16) << std::setfill('0') << dist(gen);
     return oss.str();
 }
 
-void LoginHandler::handleRequest(Poco::Net::HTTPServerRequest& req, Poco::Net::HTTPServerResponse& resp) {
-    resp.setContentType("application/json");
-    if (req.getMethod() != "POST") {
-        resp.setStatus(Poco::Net::HTTPResponse::HTTP_METHOD_NOT_ALLOWED);
-        resp.send() << "{}";
-        return;
-    }
-    std::istream& body = req.stream();
-    std::string bodyStr((std::istreambuf_iterator<char>(body)), std::istreambuf_iterator<char>());
+}  // namespace
 
-    Poco::JSON::Parser parser;
-    Poco::Dynamic::Var result;
-    try {
-        result = parser.parse(bodyStr);
-    } catch (...) {
-        resp.setStatus(Poco::Net::HTTPResponse::HTTP_BAD_REQUEST);
-        resp.send() << "{\"error\":\"invalid json\"}";
-        return;
-    }
+LoginHandler::LoginHandler(const userver::components::ComponentConfig& cfg,
+                           const userver::components::ComponentContext& ctx)
+    : HttpHandlerBase(cfg, ctx),
+      pg_(ctx.FindComponent<userver::components::Postgres>("event-db").GetCluster()) {}
 
-    auto obj = result.extract<Poco::JSON::Object::Ptr>();
-    std::string login = obj->getValue<std::string>("login");
-    std::string password = obj->getValue<std::string>("password");
-    std::string hash = hashPassword(password);
+std::string LoginHandler::HandleRequest(userver::server::http::HttpRequest& req,
+                                        userver::server::request::RequestContext&) const {
+    req.GetHttpResponse().SetContentType("application/json");
 
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(Database::instance().get(),
-        "SELECT id FROM users WHERE login=? AND password_hash=?", -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, login.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, hash.c_str(), -1, SQLITE_TRANSIENT);
+    const auto body = userver::formats::json::FromString(req.RequestBody());
+    const auto login    = body["login"].As<std::string>();
+    const auto password = body["password"].As<std::string>();
+    const auto hash     = userver::crypto::hash::Sha256(password);
 
-    int userId = -1;
-    if (sqlite3_step(stmt) == SQLITE_ROW)
-        userId = sqlite3_column_int(stmt, 0);
-    sqlite3_finalize(stmt);
+    auto res = pg_->Execute(
+        userver::storages::postgres::ClusterHostType::kSlave,
+        "SELECT id FROM users WHERE login=$1 AND password_hash=$2",
+        login, hash);
 
-    if (userId == -1) {
-        resp.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
-        resp.send() << "{\"error\":\"invalid credentials\"}";
-        return;
+    if (res.IsEmpty()) {
+        req.GetHttpResponse().SetStatus(userver::server::http::HttpStatus::kUnauthorized);
+        return R"({"error":"invalid credentials"})";
     }
 
-    std::string token = AuthMiddleware::instance().createToken(userId, login);
-    resp.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
-    resp.send() << "{\"token\":\"" << token << "\"}";
+    const int userId = res.Front()[0].As<int>();
+    const std::string token = GenerateToken();
+
+    pg_->Execute(
+        userver::storages::postgres::ClusterHostType::kMaster,
+        "INSERT INTO sessions(token, user_id) VALUES($1, $2)",
+        token, userId);
+
+    userver::formats::json::ValueBuilder resp;
+    resp["token"] = token;
+    return userver::formats::json::ToString(resp.ExtractValue());
 }
 
-void LogoutHandler::handleRequest(Poco::Net::HTTPServerRequest& req, Poco::Net::HTTPServerResponse& resp) {
-    resp.setContentType("application/json");
-    std::string auth = req.get("Authorization", "");
-    if (auth.substr(0, 7) == "Bearer ")
-        AuthMiddleware::instance().removeToken(auth.substr(7));
-    resp.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
-    resp.send() << "{}";
+LogoutHandler::LogoutHandler(const userver::components::ComponentConfig& cfg,
+                             const userver::components::ComponentContext& ctx)
+    : HttpHandlerBase(cfg, ctx),
+      pg_(ctx.FindComponent<userver::components::Postgres>("event-db").GetCluster()) {}
+
+std::string LogoutHandler::HandleRequest(userver::server::http::HttpRequest& req,
+                                         userver::server::request::RequestContext&) const {
+    req.GetHttpResponse().SetContentType("application/json");
+    const auto& auth = req.GetHeader("Authorization");
+    if (auth.size() > 7 && auth.substr(0, 7) == "Bearer ") {
+        pg_->Execute(
+            userver::storages::postgres::ClusterHostType::kMaster,
+            "DELETE FROM sessions WHERE token=$1",
+            auth.substr(7));
+    }
+    return "{}";
 }
+
+}  
