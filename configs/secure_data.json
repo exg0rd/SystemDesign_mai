@@ -1,0 +1,7 @@
+{
+  "mongo_settings": {
+    "eventdb": {
+      "uri": "mongodb://mongo:27017/eventdb"
+    }
+  }
+}

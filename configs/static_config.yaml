@@ -1,92 +1,87 @@
 components_manager:
-    task_processors:
-        main-task-processor:
-            worker_threads: 4
-        fs-task-processor:
-            worker_threads: 2
-
-    default_task_processor: main-task-processor
-
     components:
         server:
             listener:
                 port: 8080
                 task_processor: main-task-processor
-
         logging:
             fs-task-processor: fs-task-processor
             loggers:
                 default:
                     file_path: '@stderr'
                     level: info
-                    overflow_behavior: discard
-
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
         dns-client:
             fs-task-processor: fs-task-processor
-
-        testsuite-support: {}
-
-        event-db:
-            dbconnection#env: POSTGRES_DSN
-            blocking_task_processor: fs-task-processor
-            dns_resolver: async
-
+        default-secdist-provider:
+            config: /app/configs/secure_data.json
+            missing-ok: true
+        secdist:
+            provider: default-secdist-provider
+        mongo:
+            dbalias: eventdb
+            appname: event_manager
+            conn_timeout: 2s
+            so_timeout: 10s
+            queue_timeout: 1s
+            initial_size: 16
+            max_size: 128
+            idle_limit: 64
+            connecting_limit: 8
         handler-login:
             path: /auth/login
             method: POST
             task_processor: main-task-processor
-
         handler-logout:
             path: /auth/logout
             method: POST
             task_processor: main-task-processor
-
         handler-create-user:
             path: /users
             method: POST
             task_processor: main-task-processor
-
-        handler-get-user:
+        handler-get-user-login:
             path: /users/{login}
             method: GET
             task_processor: main-task-processor
-
         handler-search-users:
             path: /users/search
             method: GET
             task_processor: main-task-processor
-
         handler-create-event:
             path: /events
             method: POST
             task_processor: main-task-processor
-
         handler-get-events:
             path: /events
             method: GET
             task_processor: main-task-processor
-
         handler-search-events-date:
             path: /events/search
             method: GET
             task_processor: main-task-processor
-
         handler-register-participant:
-            path: /events/{event_id}/participants
+            path: /events/{event_id}/register
             method: POST
             task_processor: main-task-processor
-
-        handler-get-participants:
+        handler-get-event-participants:
             path: /events/{event_id}/participants
             method: GET
             task_processor: main-task-processor
-
         handler-get-user-events:
-            path: /users/{user_id}/events
+            path: /users/me/events
             method: GET
             task_processor: main-task-processor
-
-        handler-cancel-registration:
-            path: /events/{event_id}/participants
+        handler-unregister-participant:
+            path: /events/{event_id}/unregister
             method: DELETE
             task_processor: main-task-processor
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor

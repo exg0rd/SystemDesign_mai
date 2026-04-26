@@ -7,11 +7,9 @@ add_subdirectory(userversource/userver)
 
 add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/handlers/AuthHandler.cpp
-    src/handlers/UserHandler.cpp
-    src/handlers/EventHandler.cpp
-    src/handlers/ParticipantHandler.cpp
+    src/handlers/user_handler.cpp
+    src/handlers/event_handler.cpp
+    src/handlers/auth_handler.cpp
 )
 
-target_include_directories(${PROJECT_NAME} PRIVATE src)
-target_link_libraries(${PROJECT_NAME} userver::postgresql)
+target_link_libraries(${PROJECT_NAME} userver::mongo)

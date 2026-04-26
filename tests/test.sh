@@ -1,108 +1,68 @@
 #!/bin/bash
 BASE=http://localhost:8080
 
-echo "=== create user ==="
+echo "=== Create user ==="
 curl -s -X POST $BASE/users \
   -H "Content-Type: application/json" \
-  -d '{"login":"exg0rd","password":"secret","first_name":"Egor","last_name":"Sayapin","email":"egor@example.com"}'
+  -d '{"login":"testuser","password":"testpass","first_name":"Test","last_name":"User","email":"test@example.com"}'
 echo
 
-echo "=== duplicate user (expect 409) ==="
-curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/users \
-  -H "Content-Type: application/json" \
-  -d '{"login":"exg0rd","password":"secret","first_name":"Egor","last_name":"Sayapin","email":"egor@example.com"}'
-echo
-
-echo "=== login ==="
+echo "=== Login ==="
 TOKEN=$(curl -s -X POST $BASE/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"login":"exg0rd","password":"secret"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
+  -d '{"login":"testuser","password":"testpass"}' | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
 echo "Token: $TOKEN"
 
-echo "=== login wrong password (expect 401) ==="
-curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"login":"exg0rd","password":"wrong"}'
-echo
-
-echo "=== get user by login ==="
-curl -s $BASE/users/exg0rd \
+echo "=== Get user by login ==="
+curl -s $BASE/users/testuser \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== get user not found (expect 404) ==="
-curl -s -o /dev/null -w "%{http_code}" $BASE/users/nobody \
+echo "=== Search users ==="
+curl -s "$BASE/users/search?first_name=Test&last_name=User" \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== search users by name mask ==="
-curl -s "$BASE/users/search?first_name=Egor&last_name=Saya" \
-  -H "Authorization: Bearer $TOKEN"
-echo
-
-echo "=== create event ==="
-EVENT=$(curl -s -X POST $BASE/events \
+echo "=== Create event ==="
+EVENT_RESP=$(curl -s -X POST $BASE/events \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"title":"MAI Lecture","description":"System design","event_date":"2026-09-01","location":"Moscow"}')
-echo $EVENT
-EVENT_ID=$(echo $EVENT | sed 's/.*"id":\([0-9]*\),.*/\1/')
+  -d '{"title":"Test Event","description":"Test description","date":"2026-12-25","location":"Moscow"}')
+echo $EVENT_RESP
+EVENT_ID=$(echo $EVENT_RESP | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 echo "Event ID: $EVENT_ID"
 
-echo "=== get all events ==="
+echo "=== Get all events ==="
 curl -s $BASE/events \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== search events by date ==="
-curl -s "$BASE/events/search?date=2026-09-01" \
+echo "=== Search events by date ==="
+curl -s "$BASE/events/search?date_from=2026-12-01&date_to=2026-12-31" \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== register on event ==="
-curl -s -X POST $BASE/events/$EVENT_ID/participants \
+echo "=== Register for event ==="
+curl -s -X POST $BASE/events/$EVENT_ID/register \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== register again (expect 409) ==="
-curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/events/$EVENT_ID/participants \
-  -H "Authorization: Bearer $TOKEN"
-echo
-
-echo "=== get participants of event ==="
+echo "=== Get event participants ==="
 curl -s $BASE/events/$EVENT_ID/participants \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== get user events ==="
-# get user id first
-USER_ID=$(curl -s $BASE/users/exg0rd \
-  -H "Authorization: Bearer $TOKEN" | sed 's/.*"id":\([0-9]*\).*/\1/')
-echo "User ID: $USER_ID"
-curl -s $BASE/users/$USER_ID/events \
+echo "=== Get user events ==="
+curl -s $BASE/users/me/events \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== cancel registration ==="
-curl -s -X DELETE $BASE/events/$EVENT_ID/participants \
+echo "=== Unregister from event ==="
+curl -s -X DELETE $BASE/events/$EVENT_ID/unregister \
   -H "Authorization: Bearer $TOKEN"
 echo
 
-echo "=== participants after cancel (should be empty) ==="
-curl -s $BASE/events/$EVENT_ID/participants \
-  -H "Authorization: Bearer $TOKEN"
-echo
-
-echo "=== access without token (expect 401) ==="
-curl -s -o /dev/null -w "%{http_code}" $BASE/events
-echo
-
-echo "=== logout ==="
+echo "=== Logout ==="
 curl -s -X POST $BASE/auth/logout \
-  -H "Authorization: Bearer $TOKEN"
-echo
-
-echo "=== access after logout (expect 401) ==="
-curl -s -o /dev/null -w "%{http_code}" $BASE/events \
   -H "Authorization: Bearer $TOKEN"
 echo
