@@ -9,6 +9,8 @@
 #include "handlers/auth_handler.hpp"
 #include "handlers/user_handler.hpp"
 #include "handlers/event_handler.hpp"
+#include "cache/cache_component.hpp"
+#include "rate_limiter/rate_limiter_component.hpp"
 
 int main(int argc, char* argv[]) {
     auto component_list = userver::components::MinimalServerComponentList()
@@ -17,6 +19,8 @@ int main(int argc, char* argv[]) {
         .Append<userver::components::Secdist>()
         .Append<userver::components::Mongo>("mongo")
         .Append<userver::clients::dns::Component>()
+        .Append<cache::CacheComponent>()
+        .Append<rate_limit::RateLimiterComponent>()
         .Append<handlers::Login>()
         .Append<handlers::Logout>()
         .Append<handlers::CreateUser>()

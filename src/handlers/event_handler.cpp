@@ -1,5 +1,7 @@
 #include "event_handler.hpp"
 #include "auth_handler.hpp"
+#include "../cache/cache_manager.hpp"
+#include "../rate_limiter/rate_limiter.hpp"
 #include <userver/components/component.hpp>
 #include <userver/storages/mongo/component.hpp>
 #include <userver/formats/bson.hpp>
@@ -19,7 +21,8 @@ static bool CheckAuth(const userver::server::http::HttpRequest& request, std::st
 CreateEvent::CreateEvent(const userver::components::ComponentConfig& config,
                          const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string CreateEvent::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                            userver::server::request::RequestContext&) const {
@@ -53,6 +56,8 @@ std::string CreateEvent::HandleRequestThrow(const userver::server::http::HttpReq
 
     coll.InsertOne(doc);
     request.SetResponseStatus(userver::server::http::HttpStatus::kCreated);
+    cache_manager_->Delete("events:all");
+    cache_manager_->DeleteByPattern("events:user:*");
     return userver::formats::json::ToString(
         userver::formats::json::MakeObject("id", new_id.ToString(), "title", title));
 }
@@ -60,7 +65,9 @@ std::string CreateEvent::HandleRequestThrow(const userver::server::http::HttpReq
 GetEvents::GetEvents(const userver::components::ComponentConfig& config,
                      const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      rate_limiter_(&context.FindComponent<rate_limit::RateLimiterComponent>("rate-limiter").GetRateLimiter()) {}
 
 std::string GetEvents::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                          userver::server::request::RequestContext&) const {
@@ -69,6 +76,29 @@ std::string GetEvents::HandleRequestThrow(const userver::server::http::HttpReque
         request.SetResponseStatus(userver::server::http::HttpStatus::kUnauthorized);
         return userver::formats::json::ToString(
             userver::formats::json::MakeObject("error", "unauthorized"));
+    }
+
+    auto remote_addr = request.GetRemoteAddress();
+    std::string client_ip = remote_addr.PrimaryAddressString() + ":" + std::to_string(remote_addr.Port());
+    rate_limit::RateLimitConfig config = {100, std::chrono::minutes(1)};
+    auto result = rate_limiter_->Allow(client_ip, config);
+    
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Limit"), std::to_string(config.limit));
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Remaining"), std::to_string(result.remaining));
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Reset"), 
+        std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+            result.reset_time.time_since_epoch()).count()));
+    
+    if (!result.allowed) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kTooManyRequests);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "rate limit exceeded"));
+    }
+
+    std::string cache_key = "events:all";
+    std::string cached = cache_manager_->Get(cache_key);
+    if (!cached.empty()) {
+        return cached;
     }
 
     auto coll = mongo_pool_->GetCollection("events");
@@ -86,13 +116,16 @@ std::string GetEvents::HandleRequestThrow(const userver::server::http::HttpReque
         ));
     }
 
-    return userver::formats::json::ToString(builder.ExtractValue());
+    std::string result_json = userver::formats::json::ToString(builder.ExtractValue());
+    cache_manager_->Set(cache_key, result_json, std::chrono::seconds(300));
+    return result_json;
 }
 
 SearchEventsByDate::SearchEventsByDate(const userver::components::ComponentConfig& config,
                                        const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string SearchEventsByDate::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                                   userver::server::request::RequestContext&) const {
@@ -105,6 +138,11 @@ std::string SearchEventsByDate::HandleRequestThrow(const userver::server::http::
 
     std::string date_from = request.GetArg("date_from");
     std::string date_to = request.GetArg("date_to");
+    std::string cache_key = "events:search:" + date_from + ":" + date_to;
+    std::string cached = cache_manager_->Get(cache_key);
+    if (!cached.empty()) {
+        return cached;
+    }
 
     auto from = userver::utils::datetime::Stringtime(date_from, "UTC", "%Y-%m-%d");
     auto to = userver::utils::datetime::Stringtime(date_to, "UTC", "%Y-%m-%d");
@@ -128,13 +166,16 @@ std::string SearchEventsByDate::HandleRequestThrow(const userver::server::http::
         ));
     }
 
-    return userver::formats::json::ToString(builder.ExtractValue());
+    std::string result_json = userver::formats::json::ToString(builder.ExtractValue());
+    cache_manager_->Set(cache_key, result_json, std::chrono::seconds(120));
+    return result_json;
 }
 
 RegisterParticipant::RegisterParticipant(const userver::components::ComponentConfig& config,
                                          const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string RegisterParticipant::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                                    userver::server::request::RequestContext&) const {
@@ -159,6 +200,8 @@ std::string RegisterParticipant::HandleRequestThrow(const userver::server::http:
     );
 
     coll.UpdateOne(filter, update);
+    cache_manager_->Delete("events:participants:" + event_id);
+    cache_manager_->DeleteByPattern("events:user:*");
     return userver::formats::json::ToString(
         userver::formats::json::MakeObject("status", "registered"));
 }
@@ -166,7 +209,8 @@ std::string RegisterParticipant::HandleRequestThrow(const userver::server::http:
 GetEventParticipants::GetEventParticipants(const userver::components::ComponentConfig& config,
                                            const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string GetEventParticipants::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                                     userver::server::request::RequestContext&) const {
@@ -178,6 +222,11 @@ std::string GetEventParticipants::HandleRequestThrow(const userver::server::http
     }
 
     std::string event_id = request.GetPathArg("event_id");
+    std::string cache_key = "events:participants:" + event_id;
+    std::string cached = cache_manager_->Get(cache_key);
+    if (!cached.empty()) {
+        return cached;
+    }
 
     auto coll = mongo_pool_->GetCollection("events");
     auto filter = userver::formats::bson::MakeDoc("_id", userver::formats::bson::Oid(event_id));
@@ -201,13 +250,16 @@ std::string GetEventParticipants::HandleRequestThrow(const userver::server::http
         ));
     }
 
-    return userver::formats::json::ToString(builder.ExtractValue());
+    std::string result_json = userver::formats::json::ToString(builder.ExtractValue());
+    cache_manager_->Set(cache_key, result_json, std::chrono::seconds(300));
+    return result_json;
 }
 
 GetUserEvents::GetUserEvents(const userver::components::ComponentConfig& config,
                              const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string GetUserEvents::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                              userver::server::request::RequestContext&) const {
@@ -216,6 +268,12 @@ std::string GetUserEvents::HandleRequestThrow(const userver::server::http::HttpR
         request.SetResponseStatus(userver::server::http::HttpStatus::kUnauthorized);
         return userver::formats::json::ToString(
             userver::formats::json::MakeObject("error", "unauthorized"));
+    }
+
+    std::string cache_key = "events:user:" + user_id;
+    std::string cached = cache_manager_->Get(cache_key);
+    if (!cached.empty()) {
+        return cached;
     }
 
     auto coll = mongo_pool_->GetCollection("events");
@@ -234,13 +292,16 @@ std::string GetUserEvents::HandleRequestThrow(const userver::server::http::HttpR
         ));
     }
 
-    return userver::formats::json::ToString(builder.ExtractValue());
+    std::string result_json = userver::formats::json::ToString(builder.ExtractValue());
+    cache_manager_->Set(cache_key, result_json, std::chrono::seconds(180));
+    return result_json;
 }
 
 UnregisterParticipant::UnregisterParticipant(const userver::components::ComponentConfig& config,
                                              const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string UnregisterParticipant::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                                      userver::server::request::RequestContext&) const {
@@ -264,6 +325,8 @@ std::string UnregisterParticipant::HandleRequestThrow(const userver::server::htt
     );
 
     coll.UpdateOne(filter, update);
+    cache_manager_->Delete("events:participants:" + event_id);
+    cache_manager_->DeleteByPattern("events:user:*");
     return userver::formats::json::ToString(
         userver::formats::json::MakeObject("status", "unregistered"));
 }

@@ -1,4 +1,6 @@
 #include "auth_handler.hpp"
+#include "../cache/cache_manager.hpp"
+#include "../rate_limiter/rate_limiter.hpp"
 #include <userver/components/component.hpp>
 #include <userver/storages/mongo/component.hpp>
 #include <userver/formats/bson.hpp>
@@ -46,7 +48,9 @@ void AuthMiddleware::RemoveToken(const std::string& token) {
 Login::Login(const userver::components::ComponentConfig& config,
              const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      rate_limiter_(&context.FindComponent<rate_limit::RateLimiterComponent>("rate-limiter").GetRateLimiter()) {}
 
 std::string Login::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                      userver::server::request::RequestContext&) const {

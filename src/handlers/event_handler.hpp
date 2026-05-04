@@ -2,6 +2,8 @@
 #include <userver/components/component_list.hpp>
 #include <userver/server/handlers/http_handler_base.hpp>
 #include <userver/storages/mongo/pool.hpp>
+#include "../cache/cache_component.hpp"
+#include "../rate_limiter/rate_limiter_component.hpp"
 
 namespace handlers {
 
@@ -15,6 +17,7 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
 };
 
 class GetEvents : public userver::server::handlers::HttpHandlerBase {
@@ -27,6 +30,8 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
+    rate_limit::RateLimiter* rate_limiter_;
 };
 
 class SearchEventsByDate : public userver::server::handlers::HttpHandlerBase {
@@ -39,6 +44,7 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
 };
 
 class RegisterParticipant : public userver::server::handlers::HttpHandlerBase {
@@ -51,6 +57,7 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
 };
 
 class GetEventParticipants : public userver::server::handlers::HttpHandlerBase {
@@ -63,6 +70,7 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
 };
 
 class GetUserEvents : public userver::server::handlers::HttpHandlerBase {
@@ -75,6 +83,7 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
 };
 
 class UnregisterParticipant : public userver::server::handlers::HttpHandlerBase {
@@ -87,6 +96,7 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
 };
 
 }

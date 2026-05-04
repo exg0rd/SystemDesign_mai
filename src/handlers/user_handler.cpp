@@ -1,5 +1,7 @@
 #include "user_handler.hpp"
 #include "auth_handler.hpp"
+#include "../cache/cache_manager.hpp"
+#include "../rate_limiter/rate_limiter.hpp"
 #include <userver/components/component.hpp>
 #include <userver/storages/mongo/component.hpp>
 #include <userver/formats/bson.hpp>
@@ -19,7 +21,8 @@ static bool CheckAuth(const userver::server::http::HttpRequest& request, std::st
 CreateUser::CreateUser(const userver::components::ComponentConfig& config,
                        const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
 
 std::string CreateUser::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                           userver::server::request::RequestContext&) const {
@@ -46,6 +49,7 @@ std::string CreateUser::HandleRequestThrow(const userver::server::http::HttpRequ
     try {
         coll.InsertOne(doc);
         request.SetResponseStatus(userver::server::http::HttpStatus::kCreated);
+        cache_manager_->Delete("user:login:" + login);
         return userver::formats::json::ToString(
             userver::formats::json::MakeObject("id", new_id.ToString(), "login", login));
     } catch (...) {
@@ -58,7 +62,9 @@ std::string CreateUser::HandleRequestThrow(const userver::server::http::HttpRequ
 GetUserByLogin::GetUserByLogin(const userver::components::ComponentConfig& config,
                                const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      rate_limiter_(&context.FindComponent<rate_limit::RateLimiterComponent>("rate-limiter").GetRateLimiter()) {}
 
 std::string GetUserByLogin::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                               userver::server::request::RequestContext&) const {
@@ -69,7 +75,30 @@ std::string GetUserByLogin::HandleRequestThrow(const userver::server::http::Http
             userver::formats::json::MakeObject("error", "unauthorized"));
     }
 
+    auto remote_addr = request.GetRemoteAddress();
+    std::string client_ip = remote_addr.PrimaryAddressString() + ":" + std::to_string(remote_addr.Port());
+    rate_limit::RateLimitConfig config = {100, std::chrono::minutes(1)};
+    auto result = rate_limiter_->Allow(client_ip, config);
+    
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Limit"), std::to_string(config.limit));
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Remaining"), std::to_string(result.remaining));
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Reset"), 
+        std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+            result.reset_time.time_since_epoch()).count()));
+    
+    if (!result.allowed) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kTooManyRequests);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "rate limit exceeded"));
+    }
+
     std::string login = request.GetPathArg("login");
+    std::string cache_key = "user:login:" + login;
+    std::string cached = cache_manager_->Get(cache_key);
+    if (!cached.empty()) {
+        return cached;
+    }
+
     auto coll = mongo_pool_->GetCollection("users");
     auto filter = userver::formats::bson::MakeDoc("login", login);
     auto result = coll.FindOne(filter);
@@ -87,13 +116,17 @@ std::string GetUserByLogin::HandleRequestThrow(const userver::server::http::Http
         "last_name", (*result)["last_name"].As<std::string>(),
         "email", (*result)["email"].As<std::string>()
     );
-    return userver::formats::json::ToString(json);
+    std::string result_json = userver::formats::json::ToString(json);
+    cache_manager_->Set(cache_key, result_json, std::chrono::seconds(600));
+    return result_json;
 }
 
 SearchUsers::SearchUsers(const userver::components::ComponentConfig& config,
                          const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
-      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()) {}
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      rate_limiter_(&context.FindComponent<rate_limit::RateLimiterComponent>("rate-limiter").GetRateLimiter()) {}
 
 std::string SearchUsers::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                            userver::server::request::RequestContext&) const {
@@ -104,8 +137,30 @@ std::string SearchUsers::HandleRequestThrow(const userver::server::http::HttpReq
             userver::formats::json::MakeObject("error", "unauthorized"));
     }
 
+    auto remote_addr = request.GetRemoteAddress();
+    std::string client_ip = remote_addr.PrimaryAddressString() + ":" + std::to_string(remote_addr.Port());
+    rate_limit::RateLimitConfig config = {100, std::chrono::minutes(1)};
+    auto result = rate_limiter_->Allow(client_ip, config);
+    
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Limit"), std::to_string(config.limit));
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Remaining"), std::to_string(result.remaining));
+    request.GetHttpResponse().SetHeader(std::string("X-RateLimit-Reset"), 
+        std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+            result.reset_time.time_since_epoch()).count()));
+    
+    if (!result.allowed) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kTooManyRequests);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "rate limit exceeded"));
+    }
+
     std::string first_name = request.GetArg("first_name");
     std::string last_name = request.GetArg("last_name");
+    std::string cache_key = "users:search:" + first_name + ":" + last_name;
+    std::string cached = cache_manager_->Get(cache_key);
+    if (!cached.empty()) {
+        return cached;
+    }
 
     auto coll = mongo_pool_->GetCollection("users");
     auto filter = userver::formats::bson::MakeDoc(
@@ -126,7 +181,9 @@ std::string SearchUsers::HandleRequestThrow(const userver::server::http::HttpReq
         ));
     }
 
-    return userver::formats::json::ToString(builder.ExtractValue());
+    std::string result_json = userver::formats::json::ToString(builder.ExtractValue());
+    cache_manager_->Set(cache_key, result_json, std::chrono::seconds(120));
+    return result_json;
 }
 
 }

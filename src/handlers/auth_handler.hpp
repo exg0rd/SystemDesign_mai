@@ -4,6 +4,8 @@
 #include <userver/storages/mongo/pool.hpp>
 #include <map>
 #include <mutex>
+#include "../cache/cache_component.hpp"
+#include "../rate_limiter/rate_limiter_component.hpp"
 
 namespace handlers {
 
@@ -29,6 +31,8 @@ public:
 
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
+    rate_limit::RateLimiter* rate_limiter_;
 };
 
 class Logout : public userver::server::handlers::HttpHandlerBase {
