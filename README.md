@@ -141,25 +141,3 @@ make -j$(nproc)
 ```bash
 ./build/event_manager
 ```
-
-## Документация
-
-- `event_driven_design.md` - полное описание Event-Driven архитектуры
-- `event_catalog.md` - каталог всех событий с описанием
-
-## Требования
-
-- Docker и Docker Compose
-- C++20 компилятор
-- CMake 3.16+
-- userver framework
-- RabbitMQ C client library (librabbitmq)
-
-## Критерии оценки
-
-- Корректность определения событий и команд
-- Качество проектирования Event-Driven архитектуры
-- Правильность выбора типов exchange и routing
-- Применение паттерна CQRS
-- Качество каталога событий
-- Работоспособность реализации
