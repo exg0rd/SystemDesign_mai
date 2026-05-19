@@ -1,107 +1,165 @@
-# ЛАБОРАТОРНАЯ РАБОТА №5 - ВАРИАНТ 22
-# Event Manager API - MongoDB с кешированием и rate limiting
+# Лабораторная работа 6: разработка ED архитектуры
 
-REST API на C++ userver + MongoDB для управления событиями с оптимизацией производительности.
+Проектирование и реализация событийно-ориентированной архитектуры с использованием RabbitMQ и паттерна CQRS.
 
-## Оптимизации
+## Структура проекта
 
-### Кеширование
-- Cache-Aside стратегия для всех read endpoints
-- TTL от 1 до 15 минут в зависимости от типа данных
-- Инвалидация при обновлении данных
-- Ожидаемое ускорение: 20-50x для кешируемых endpoints
+```
+.
+├── event_driven_design.md      # Описание Event-Driven архитектуры
+├── event_catalog.md            # Каталог событий
+├── docker-compose.yml          # Docker Compose для RabbitMQ
+├── Dockerfile.event-producer   # Dockerfile для producer
+├── Dockerfile.event-consumer   # Dockerfile для consumer
+├── src/
+│   ├── event_producer.hpp      # Интерфейс producer
+│   ├── event_producer.cpp      # Реализация producer
+│   ├── event_consumer.hpp      # Интерфейс consumer
+│   └── event_consumer.cpp      # Реализация consumer
+└── README.md                   # Этот файл
+```
 
-### Rate limiting
-- Sliding Window для read endpoints
-- Token Bucket для write/auth endpoints
-- HTTP заголовки для информирования клиентов
-- Защита от abuse и DDoS атак
+## Архитектура
+
+### Event-Driven компоненты
+
+1. **Event Producers** - производители событий
+   - UserService - события UserCreated, UserDeleted
+   - EventService - события EventCreated, EventUpdated, EventDeleted
+   - RegistrationService - события ParticipantRegistered, ParticipantUnregistered
+   - EventScheduler - событие EventCompleted
+
+2. **Event Consumers** - потребители событий
+   - NotificationService - уведомления
+   - AnalyticsService - аналитика
+   - CacheService - инвалидация кеша
+   - SearchService - индексация
+   - ReportingService - отчеты
+
+3. **Message Broker** - RabbitMQ
+   - Exchanges: direct, fanout, topic
+   - Queues: notifications, analytics, cache-invalidation, search-index, reporting
+
+### CQRS
+
+- **Command Model** - операции записи (CreateUser, CreateEvent, RegisterParticipant)
+- **Query Model** - операции чтения (GetUser, GetEvents, SearchUsers)
+- События синхронизируют read и write модели
 
 ## Запуск
 
+### С помощью Docker Compose
+
 ```bash
-docker-compose up --build
+docker-compose up -d
 ```
 
-API: `http://localhost:8080`
-MongoDB: `localhost:27017`
-
-## Инициализация данных
+### Проверка RabbitMQ
 
 ```bash
-docker exec -i event-manager-mongo-mongo-1 mongosh eventdb < data.js
+# Проверка статуса
+docker-compose ps
+
+# Логи RabbitMQ
+docker-compose logs rabbitmq
+
+# Доступ к management console
+# http://localhost:15672
+# user: guest
+# pass: guest
 ```
 
-## Валидация схем
+## События
+
+### 1. UserCreated
+- Routing Key: `user.created`
+- Exchange: `events.direct`
+- Потребители: NotificationService, AnalyticsService, SearchService
+
+### 2. UserDeleted
+- Routing Key: `user.deleted`
+- Exchange: `events.direct`
+- Потребители: NotificationService, AnalyticsService, SearchService
+
+### 3. EventCreated
+- Routing Key: `event.created`
+- Exchange: `events.direct`
+- Потребители: NotificationService, CacheService, AnalyticsService
+
+### 4. EventUpdated
+- Routing Key: `event.updated`
+- Exchange: `events.direct`
+- Потребители: NotificationService, CacheService, AnalyticsService
+
+### 5. EventDeleted
+- Routing Key: `event.deleted`
+- Exchange: `events.direct`
+- Потребители: CacheService, AnalyticsService
+
+### 6. ParticipantRegistered
+- Routing Key: `participant.registered`
+- Exchange: `events.direct`
+- Потребители: NotificationService, CacheService, AnalyticsService
+
+### 7. ParticipantUnregistered
+- Routing Key: `participant.unregistered`
+- Exchange: `events.direct`
+- Потребители: NotificationService, CacheService, AnalyticsService
+
+### 8. EventCompleted
+- Routing Key: `event.completed`
+- Exchange: `events.direct`
+- Потребители: NotificationService, AnalyticsService
+
+## Гарантии доставки
+
+- **At-Least-Once** доставка
+- Persistent messages на диск
+- Publisher confirms
+- Consumer acknowledgment (ack/nack)
+- Max requeue: 3
+- Dead Letter Queue для недоставленных сообщений
+
+## Использование
+
+### Компиляция
 
 ```bash
-docker exec -i event-manager-mongo-mongo-1 mongosh < validation.js
+mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
 ```
 
-## Тестовые запросы
+### Запуск producer
 
 ```bash
-docker exec -i event-manager-mongo-mongo-1 mongosh eventdb < queries.js
+./build/event_manager
 ```
 
-## API Endpoints
-
-| Метод | URL | Описание | Auth | Rate Limit |
-|-------|-----|----------|------|------------|
-| POST | /users | Создать пользователя | нет | 10 req/min |
-| POST | /auth/login | Войти | нет | 5 req/min |
-| POST | /auth/logout | Выйти | да | 10 req/min |
-| GET | /users/{login} | Найти по логину | да | 100 req/min |
-| GET | /users/search?first_name=&last_name= | Поиск по имени | да | 100 req/min |
-| POST | /events | Создать событие | да | 20 req/min |
-| GET | /events | Список событий | да | 100 req/min |
-| GET | /events/search?date_from=&date_to= | Поиск по дате | да | 30 req/min |
-| POST | /events/{id}/register | Регистрация на событие | да | 20 req/min |
-| GET | /events/{id}/participants | Участники события | да | 100 req/min |
-| GET | /users/me/events | События пользователя | да | 100 req/min |
-| DELETE | /events/{id}/unregister | Отмена регистрации | да | 20 req/min |
-
-## Примеры
+### Запуск consumer
 
 ```bash
-curl -X POST http://localhost:8080/users \
-  -H "Content-Type: application/json" \
-  -d '{"login":"test","password":"pass","first_name":"Test","last_name":"User","email":"test@example.com"}'
-
-curl -X POST http://localhost:8080/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"login":"test","password":"pass"}'
-
-TOKEN="<token>"
-
-curl -X POST http://localhost:8080/events \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"title":"My Event","date":"2026-12-25","location":"Moscow"}'
-
-curl http://localhost:8080/events \
-  -H "Authorization: Bearer $TOKEN"
-
-curl "http://localhost:8080/events/search?date_from=2026-06-01&date_to=2026-12-31" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl -X POST http://localhost:8080/events/<event_id>/register \
-  -H "Authorization: Bearer $TOKEN"
-
-curl http://localhost:8080/events/<event_id>/participants \
-  -H "Authorization: Bearer $TOKEN"
-
-curl http://localhost:8080/users/me/events \
-  -H "Authorization: Bearer $TOKEN"
-
-curl -X DELETE http://localhost:8080/events/<event_id>/unregister \
-  -H "Authorization: Bearer $TOKEN"
+./build/event_manager
 ```
 
 ## Документация
 
-- `performance_design.md` - описание стратегии кеширования и rate limiting
-- `schema_design.md` - проектирование модели данных
-- `data.js` - тестовые данные
-- `queries.js` - примеры MongoDB запросов
-- `validation.js` - валидация схем
+- `event_driven_design.md` - полное описание Event-Driven архитектуры
+- `event_catalog.md` - каталог всех событий с описанием
+
+## Требования
+
+- Docker и Docker Compose
+- C++20 компилятор
+- CMake 3.16+
+- userver framework
+- RabbitMQ C client library (librabbitmq)
+
+## Критерии оценки
+
+- Корректность определения событий и команд
+- Качество проектирования Event-Driven архитектуры
+- Правильность выбора типов exchange и routing
+- Применение паттерна CQRS
+- Качество каталога событий
+- Работоспособность реализации

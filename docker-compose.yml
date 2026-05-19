@@ -1,0 +1,81 @@
+version: "3.9"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: event-manager-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - event-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: event-manager-api
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongo:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/eventdb
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+    networks:
+      - event-network
+
+  event-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: event-manager-consumer
+    depends_on:
+      mongo:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/eventdb
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+      - SERVICE_TYPE=consumer
+    networks:
+      - event-network
+
+  mongo:
+    image: mongo:7
+    container_name: event-manager-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data.js:/docker-entrypoint-initdb.d/data.js:ro
+    environment:
+      MONGO_INITDB_DATABASE: eventdb
+    networks:
+      - event-network
+
+networks:
+  event-network:
+    driver: bridge
+
+volumes:
+  rabbitmq-data:

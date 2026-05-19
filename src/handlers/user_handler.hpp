@@ -4,6 +4,7 @@
 #include <userver/storages/mongo/pool.hpp>
 #include "../cache/cache_component.hpp"
 #include "../rate_limiter/rate_limiter_component.hpp"
+#include "../event_producer_component.hpp"
 
 namespace handlers {
 
@@ -18,6 +19,7 @@ public:
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
     cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
 };
 
 class GetUserByLogin : public userver::server::handlers::HttpHandlerBase {
@@ -46,6 +48,34 @@ private:
     userver::storages::mongo::PoolPtr mongo_pool_;
     cache::CacheManager* cache_manager_;
     rate_limit::RateLimiter* rate_limiter_;
+};
+
+class UpdateUser : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-update-user";
+    UpdateUser(const userver::components::ComponentConfig& config,
+               const userver::components::ComponentContext& context);
+    std::string HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                   userver::server::request::RequestContext&) const override;
+
+private:
+    userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
+};
+
+class DeleteUser : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-delete-user";
+    DeleteUser(const userver::components::ComponentConfig& config,
+               const userver::components::ComponentContext& context);
+    std::string HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                   userver::server::request::RequestContext&) const override;
+
+private:
+    userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
 };
 
 }

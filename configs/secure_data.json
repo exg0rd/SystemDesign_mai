@@ -3,5 +3,15 @@
     "eventdb": {
       "uri": "mongodb://mongo:27017/eventdb"
     }
+  },
+  "rabbitmq_settings": {
+    "my-rabbit-alias": {
+      "hosts": ["rabbitmq"],
+      "port": 5672,
+      "login": "guest",
+      "password": "guest",
+      "vhost": "/",
+      "use_ssl": false
+    }
   }
 }

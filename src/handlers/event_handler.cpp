@@ -9,6 +9,7 @@
 #include <userver/formats/json.hpp>
 #include <userver/storages/mongo/collection.hpp>
 #include <userver/utils/datetime.hpp>
+#include "../event_producer_component.hpp"
 
 namespace handlers {
 
@@ -22,7 +23,8 @@ CreateEvent::CreateEvent(const userver::components::ComponentConfig& config,
                          const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
       mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
-      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
 
 std::string CreateEvent::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                            userver::server::request::RequestContext&) const {
@@ -58,6 +60,7 @@ std::string CreateEvent::HandleRequestThrow(const userver::server::http::HttpReq
     request.SetResponseStatus(userver::server::http::HttpStatus::kCreated);
     cache_manager_->Delete("events:all");
     cache_manager_->DeleteByPattern("events:user:*");
+    producer_->PublishEventCreated(new_id.ToString(), title, description, date_str, location, user_id);
     return userver::formats::json::ToString(
         userver::formats::json::MakeObject("id", new_id.ToString(), "title", title));
 }
@@ -175,7 +178,8 @@ RegisterParticipant::RegisterParticipant(const userver::components::ComponentCon
                                          const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
       mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
-      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
 
 std::string RegisterParticipant::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                                    userver::server::request::RequestContext&) const {
@@ -190,6 +194,12 @@ std::string RegisterParticipant::HandleRequestThrow(const userver::server::http:
 
     auto coll = mongo_pool_->GetCollection("events");
     auto filter = userver::formats::bson::MakeDoc("_id", userver::formats::bson::Oid(event_id));
+    auto event_doc = coll.FindOne(filter);
+
+    auto users_coll = mongo_pool_->GetCollection("users");
+    auto user_filter = userver::formats::bson::MakeDoc("_id", userver::formats::bson::Oid(user_id));
+    auto user_doc = users_coll.FindOne(user_filter);
+
     auto update = userver::formats::bson::MakeDoc(
         "$push", userver::formats::bson::MakeDoc(
             "participants", userver::formats::bson::MakeDoc(
@@ -202,6 +212,15 @@ std::string RegisterParticipant::HandleRequestThrow(const userver::server::http:
     coll.UpdateOne(filter, update);
     cache_manager_->Delete("events:participants:" + event_id);
     cache_manager_->DeleteByPattern("events:user:*");
+
+    if (event_doc && user_doc) {
+        producer_->PublishParticipantRegistered(
+            event_id, user_id,
+            (*user_doc)["login"].As<std::string>(),
+            (*user_doc)["first_name"].As<std::string>(""),
+            (*user_doc)["last_name"].As<std::string>(""),
+            (*user_doc)["email"].As<std::string>(""));
+    }
     return userver::formats::json::ToString(
         userver::formats::json::MakeObject("status", "registered"));
 }
@@ -297,11 +316,96 @@ std::string GetUserEvents::HandleRequestThrow(const userver::server::http::HttpR
     return result_json;
 }
 
+UpdateEvent::UpdateEvent(const userver::components::ComponentConfig& config,
+                         const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
+
+std::string UpdateEvent::HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                           userver::server::request::RequestContext&) const {
+    std::string user_id;
+    if (!CheckAuth(request, user_id)) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kUnauthorized);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "unauthorized"));
+    }
+
+    std::string event_id = request.GetPathArg("event_id");
+    auto body = userver::formats::json::FromString(request.RequestBody());
+    std::string title = body["title"].As<std::string>();
+    std::string description = body["description"].As<std::string>("");
+    std::string date_str = body["date"].As<std::string>();
+    std::string location = body["location"].As<std::string>("");
+
+    auto coll = mongo_pool_->GetCollection("events");
+    auto filter = userver::formats::bson::MakeDoc("_id", userver::formats::bson::Oid(event_id));
+    auto update = userver::formats::bson::MakeDoc(
+        "$set", userver::formats::bson::MakeDoc(
+            "title", title,
+            "description", description,
+            "date", userver::utils::datetime::Stringtime(date_str, "UTC", "%Y-%m-%d"),
+            "location", location,
+            "updated_at", std::chrono::system_clock::now()));
+
+    auto result = coll.UpdateOne(filter, update);
+    if (result.MatchedCount() == 0) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kNotFound);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "event not found"));
+    }
+
+    cache_manager_->Delete("events:all");
+    cache_manager_->Delete("events:participants:" + event_id);
+    cache_manager_->DeleteByPattern("events:user:*");
+    producer_->PublishEventUpdated(event_id, title, description, date_str, location);
+    return userver::formats::json::ToString(
+        userver::formats::json::MakeObject("status", "updated"));
+}
+
+DeleteEvent::DeleteEvent(const userver::components::ComponentConfig& config,
+                         const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
+
+std::string DeleteEvent::HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                           userver::server::request::RequestContext&) const {
+    std::string user_id;
+    if (!CheckAuth(request, user_id)) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kUnauthorized);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "unauthorized"));
+    }
+
+    std::string event_id = request.GetPathArg("event_id");
+
+    auto coll = mongo_pool_->GetCollection("events");
+    auto filter = userver::formats::bson::MakeDoc("_id", userver::formats::bson::Oid(event_id));
+    auto event_doc = coll.FindOne(filter);
+    if (!event_doc) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kNotFound);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "event not found"));
+    }
+
+    coll.DeleteOne(filter);
+    cache_manager_->Delete("events:all");
+    cache_manager_->Delete("events:participants:" + event_id);
+    cache_manager_->DeleteByPattern("events:user:*");
+    producer_->PublishEventDeleted(event_id, (*event_doc)["title"].As<std::string>());
+    return userver::formats::json::ToString(
+        userver::formats::json::MakeObject("status", "deleted"));
+}
+
 UnregisterParticipant::UnregisterParticipant(const userver::components::ComponentConfig& config,
                                              const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
       mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
-      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
 
 std::string UnregisterParticipant::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                                      userver::server::request::RequestContext&) const {
@@ -327,6 +431,16 @@ std::string UnregisterParticipant::HandleRequestThrow(const userver::server::htt
     coll.UpdateOne(filter, update);
     cache_manager_->Delete("events:participants:" + event_id);
     cache_manager_->DeleteByPattern("events:user:*");
+
+    auto users_coll = mongo_pool_->GetCollection("users");
+    auto user_filter = userver::formats::bson::MakeDoc("_id", userver::formats::bson::Oid(user_id));
+    auto user_doc = users_coll.FindOne(user_filter);
+
+    if (user_doc) {
+        producer_->PublishParticipantUnregistered(
+            event_id, user_id,
+            (*user_doc)["login"].As<std::string>(""));
+    }
     return userver::formats::json::ToString(
         userver::formats::json::MakeObject("status", "unregistered"));
 }

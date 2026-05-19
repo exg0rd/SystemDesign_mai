@@ -31,6 +31,19 @@ components_manager:
             max_size: 128
             idle_limit: 64
             connecting_limit: 8
+        my-rabbit:
+            secdist_alias: my-rabbit-alias
+            min_pool_size: 5
+            max_pool_size: 10
+            use_secure_connection: false
+        event-consumer:
+            load-enabled: false
+            rabbit_name: my-rabbit
+            queue: notifications
+            prefetch_count: 10
+        event-producer:
+        cache-manager:
+        rate-limiter:
         handler-login:
             path: /auth/login
             method: POST
@@ -51,6 +64,14 @@ components_manager:
             path: /users/search
             method: GET
             task_processor: main-task-processor
+        handler-update-user:
+            path: /users/{login}
+            method: PUT
+            task_processor: main-task-processor
+        handler-delete-user:
+            path: /users/{login}
+            method: DELETE
+            task_processor: main-task-processor
         handler-create-event:
             path: /events
             method: POST
@@ -62,6 +83,14 @@ components_manager:
         handler-search-events-date:
             path: /events/search
             method: GET
+            task_processor: main-task-processor
+        handler-update-event:
+            path: /events/{event_id}
+            method: PUT
+            task_processor: main-task-processor
+        handler-delete-event:
+            path: /events/{event_id}
+            method: DELETE
             task_processor: main-task-processor
         handler-register-participant:
             path: /events/{event_id}/register
@@ -79,8 +108,6 @@ components_manager:
             path: /events/{event_id}/unregister
             method: DELETE
             task_processor: main-task-processor
-        cache-manager:
-        rate-limiter:
     task_processors:
         main-task-processor:
             worker_threads: 4

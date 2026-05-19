@@ -14,6 +14,11 @@ add_executable(${PROJECT_NAME}
     src/cache/cache_component.cpp
     src/rate_limiter/rate_limiter.cpp
     src/rate_limiter/rate_limiter_component.cpp
+    src/event_producer_component.cpp
+    src/event_consumer_component.cpp
 )
 
-target_link_libraries(${PROJECT_NAME} userver::mongo)
+target_link_libraries(${PROJECT_NAME}
+    userver::mongo
+    userver::core
+    userver::rabbitmq)

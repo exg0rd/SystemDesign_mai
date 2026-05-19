@@ -4,6 +4,7 @@
 #include <userver/storages/mongo/pool.hpp>
 #include "../cache/cache_component.hpp"
 #include "../rate_limiter/rate_limiter_component.hpp"
+#include "../event_producer_component.hpp"
 
 namespace handlers {
 
@@ -18,6 +19,7 @@ public:
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
     cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
 };
 
 class GetEvents : public userver::server::handlers::HttpHandlerBase {
@@ -58,6 +60,7 @@ public:
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
     cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
 };
 
 class GetEventParticipants : public userver::server::handlers::HttpHandlerBase {
@@ -97,6 +100,35 @@ public:
 private:
     userver::storages::mongo::PoolPtr mongo_pool_;
     cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
+};
+
+class UpdateEvent : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-update-event";
+    UpdateEvent(const userver::components::ComponentConfig& config,
+                const userver::components::ComponentContext& context);
+    std::string HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                   userver::server::request::RequestContext&) const override;
+
+private:
+    userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
+};
+
+class DeleteEvent : public userver::server::handlers::HttpHandlerBase {
+public:
+    static constexpr std::string_view kName = "handler-delete-event";
+    DeleteEvent(const userver::components::ComponentConfig& config,
+                const userver::components::ComponentContext& context);
+    std::string HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                   userver::server::request::RequestContext&) const override;
+
+private:
+    userver::storages::mongo::PoolPtr mongo_pool_;
+    cache::CacheManager* cache_manager_;
+    event_producer::EventProducerComponent* producer_;
 };
 
 }

@@ -9,6 +9,7 @@
 #include <userver/formats/json.hpp>
 #include <userver/storages/mongo/collection.hpp>
 #include <userver/crypto/hash.hpp>
+#include "../event_producer_component.hpp"
 
 namespace handlers {
 
@@ -22,7 +23,8 @@ CreateUser::CreateUser(const userver::components::ComponentConfig& config,
                        const userver::components::ComponentContext& context)
     : HttpHandlerBase(config, context),
       mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
-      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()) {}
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
 
 std::string CreateUser::HandleRequestThrow(const userver::server::http::HttpRequest& request,
                                           userver::server::request::RequestContext&) const {
@@ -50,6 +52,7 @@ std::string CreateUser::HandleRequestThrow(const userver::server::http::HttpRequ
         coll.InsertOne(doc);
         request.SetResponseStatus(userver::server::http::HttpStatus::kCreated);
         cache_manager_->Delete("user:login:" + login);
+        producer_->PublishUserCreated(new_id.ToString(), login, first_name, last_name, email);
         return userver::formats::json::ToString(
             userver::formats::json::MakeObject("id", new_id.ToString(), "login", login));
     } catch (...) {
@@ -101,20 +104,20 @@ std::string GetUserByLogin::HandleRequestThrow(const userver::server::http::Http
 
     auto coll = mongo_pool_->GetCollection("users");
     auto filter = userver::formats::bson::MakeDoc("login", login);
-    auto result = coll.FindOne(filter);
+    auto doc = coll.FindOne(filter);
 
-    if (!result) {
+    if (!doc) {
         request.SetResponseStatus(userver::server::http::HttpStatus::kNotFound);
         return userver::formats::json::ToString(
             userver::formats::json::MakeObject("error", "user not found"));
     }
 
     auto json = userver::formats::json::MakeObject(
-        "id", (*result)["_id"].As<userver::formats::bson::Oid>().ToString(),
-        "login", (*result)["login"].As<std::string>(),
-        "first_name", (*result)["first_name"].As<std::string>(),
-        "last_name", (*result)["last_name"].As<std::string>(),
-        "email", (*result)["email"].As<std::string>()
+        "id", (*doc)["_id"].As<userver::formats::bson::Oid>().ToString(),
+        "login", (*doc)["login"].As<std::string>(),
+        "first_name", (*doc)["first_name"].As<std::string>(),
+        "last_name", (*doc)["last_name"].As<std::string>(),
+        "email", (*doc)["email"].As<std::string>()
     );
     std::string result_json = userver::formats::json::ToString(json);
     cache_manager_->Set(cache_key, result_json, std::chrono::seconds(600));
@@ -184,6 +187,84 @@ std::string SearchUsers::HandleRequestThrow(const userver::server::http::HttpReq
     std::string result_json = userver::formats::json::ToString(builder.ExtractValue());
     cache_manager_->Set(cache_key, result_json, std::chrono::seconds(120));
     return result_json;
+}
+
+UpdateUser::UpdateUser(const userver::components::ComponentConfig& config,
+                       const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
+
+std::string UpdateUser::HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                           userver::server::request::RequestContext&) const {
+    std::string user_id;
+    if (!CheckAuth(request, user_id)) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kUnauthorized);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "unauthorized"));
+    }
+
+    std::string target_login = request.GetPathArg("login");
+    auto body = userver::formats::json::FromString(request.RequestBody());
+    std::string first_name = body["first_name"].As<std::string>();
+    std::string last_name = body["last_name"].As<std::string>();
+    std::string email = body["email"].As<std::string>();
+
+    auto coll = mongo_pool_->GetCollection("users");
+    auto filter = userver::formats::bson::MakeDoc("login", target_login);
+    auto update = userver::formats::bson::MakeDoc(
+        "$set", userver::formats::bson::MakeDoc(
+            "first_name", first_name,
+            "last_name", last_name,
+            "email", email,
+            "updated_at", std::chrono::system_clock::now()));
+
+    auto result = coll.UpdateOne(filter, update);
+    if (result.MatchedCount() == 0) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kNotFound);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "user not found"));
+    }
+
+    cache_manager_->Delete("user:login:" + target_login);
+    producer_->PublishUserUpdated(target_login, target_login, first_name, last_name, email);
+    return userver::formats::json::ToString(
+        userver::formats::json::MakeObject("status", "updated"));
+}
+
+DeleteUser::DeleteUser(const userver::components::ComponentConfig& config,
+                       const userver::components::ComponentContext& context)
+    : HttpHandlerBase(config, context),
+      mongo_pool_(context.FindComponent<userver::components::Mongo>("mongo").GetPool()),
+      cache_manager_(&context.FindComponent<cache::CacheComponent>("cache-manager").GetCacheManager()),
+      producer_(&context.FindComponent<event_producer::EventProducerComponent>()) {}
+
+std::string DeleteUser::HandleRequestThrow(const userver::server::http::HttpRequest& request,
+                                           userver::server::request::RequestContext&) const {
+    std::string user_id;
+    if (!CheckAuth(request, user_id)) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kUnauthorized);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "unauthorized"));
+    }
+
+    std::string target_login = request.GetPathArg("login");
+    auto coll = mongo_pool_->GetCollection("users");
+    auto filter = userver::formats::bson::MakeDoc("login", target_login);
+    auto result = coll.DeleteOne(filter);
+
+    if (result.DeletedCount() == 0) {
+        request.SetResponseStatus(userver::server::http::HttpStatus::kNotFound);
+        return userver::formats::json::ToString(
+            userver::formats::json::MakeObject("error", "user not found"));
+    }
+
+    cache_manager_->Delete("user:login:" + target_login);
+    cache_manager_->DeleteByPattern("users:search:*");
+    producer_->PublishUserDeleted(target_login, target_login);
+    return userver::formats::json::ToString(
+        userver::formats::json::MakeObject("status", "deleted"));
 }
 
 }

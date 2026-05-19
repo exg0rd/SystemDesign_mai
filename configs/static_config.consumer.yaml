@@ -1,0 +1,48 @@
+components_manager:
+    components:
+        server:
+            listener:
+                port: 8080
+                task_processor: main-task-processor
+        logging:
+            fs-task-processor: fs-task-processor
+            loggers:
+                default:
+                    file_path: '@stderr'
+                    level: info
+        handler-ping:
+            path: /ping
+            method: GET
+            task_processor: main-task-processor
+        dns-client:
+            fs-task-processor: fs-task-processor
+        default-secdist-provider:
+            config: /app/configs/secure_data.json
+            missing-ok: true
+        secdist:
+            provider: default-secdist-provider
+        mongo:
+            dbalias: eventdb
+            appname: event_manager
+            conn_timeout: 2s
+            so_timeout: 10s
+            queue_timeout: 1s
+            initial_size: 16
+            max_size: 128
+            idle_limit: 64
+            connecting_limit: 8
+        my-rabbit:
+            secdist_alias: my-rabbit-alias
+            min_pool_size: 5
+            max_pool_size: 10
+            use_secure_connection: false
+        event-consumer:
+            rabbit_name: my-rabbit
+            queue: notifications
+            prefetch_count: 10
+    task_processors:
+        main-task-processor:
+            worker_threads: 4
+        fs-task-processor:
+            worker_threads: 2
+    default_task_processor: main-task-processor
